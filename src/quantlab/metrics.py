@@ -1,3 +1,6 @@
+import math
+import warnings
+
 import numpy as np
 import pandas as pd
 
@@ -18,3 +21,35 @@ def log_returns(prices: pd.Series) -> pd.Series:
     if len(prices) < 2:
         raise ValueError("Prices must contain at least two values.")
     return (prices / prices.shift(1)).dropna().apply(np.log)
+
+
+def cagr(returns: pd.Series, periods_per_year: int = 252) -> float:
+    """CAGR: (prod(1 + r))^(periods_per_year / n) - 1."""
+    if returns.empty:
+        raise ValueError("Returns series cannot be empty.")
+    n = len(returns)
+    compounded = np.prod(1 + returns)
+    return float(math.pow(compounded, periods_per_year / n) - 1)
+
+
+def annualized_vol(returns: pd.Series, periods_per_year: int = 252) -> float:
+    """Annualised volatility: std(r, ddof=1) * sqrt(periods_per_year)."""
+    if returns.empty:
+        raise ValueError("Returns series cannot be empty.")
+    return float(returns.std() * math.sqrt(periods_per_year))
+
+
+def sharpe(returns: pd.Series, rf: float = 0.0, periods_per_year: int = 252) -> float:
+    """Sharpe ratio: mean(r - rf/periods_per_year) / std(r, ddof=1) * sqrt(periods_per_year)."""
+    if returns.empty:
+        raise ValueError("Returns series cannot be empty.")
+    vol = returns.std()
+    if vol == 0.0:
+        warnings.warn(
+            "Returns have zero variance; Sharpe ratio is undefined.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return float("nan")
+    mean_excess_return = returns.mean() - (rf / periods_per_year)
+    return float((mean_excess_return / vol) * math.sqrt(periods_per_year))

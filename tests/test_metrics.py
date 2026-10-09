@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from quantlab.metrics import log_returns, simple_returns
+from quantlab.metrics import annualized_vol, cagr, log_returns, sharpe, simple_returns
 
 
 @pytest.fixture
@@ -62,3 +62,38 @@ def test_non_positive_prices_raise(fn: Callable[[pd.Series], pd.Series]) -> None
     )
     with pytest.raises(ValueError, match="positive"):
         fn(bad)
+
+
+def test_cagr(prices: pd.Series) -> None:
+    r = simple_returns(prices)
+    expected = math.pow(1.0302, 252 / 4) - 1
+    assert cagr(r) == pytest.approx(expected)
+
+
+def test_annualized_vol(prices: pd.Series) -> None:
+    r = simple_returns(prices)
+    expected_r = [0.02, 101 / 102 - 1, 0.02, 0.0]
+    expected_vol = np.std(expected_r, ddof=1) * math.sqrt(252)
+    assert annualized_vol(r) == pytest.approx(expected_vol)
+
+
+def test_sharpe_zero_variance() -> None:
+    r = pd.Series([0.01, 0.01, 0.01, 0.01])
+    with pytest.warns(UserWarning, match="zero variance"):
+        val = sharpe(r)
+    assert math.isnan(val)
+
+
+def test_sharpe(prices: pd.Series) -> None:
+    r = simple_returns(prices)
+    expected_r = np.array([0.02, 101 / 102 - 1, 0.02, 0.0])
+    expected_vol = np.std(expected_r, ddof=1)
+    expected_sharpe = np.mean(expected_r) / expected_vol * math.sqrt(252)
+    assert sharpe(r) == pytest.approx(expected_sharpe)
+
+
+@pytest.mark.parametrize("fn", [cagr, annualized_vol, sharpe])
+def test_empty_input_raises(fn: Callable[..., float]) -> None:
+    r = pd.Series([], dtype=float)
+    with pytest.raises(ValueError):
+        fn(r)
