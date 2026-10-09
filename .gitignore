@@ -1,0 +1,40 @@
+# Virtual environment
+.venv/
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+
+# Build and packaging output
+build/
+dist/
+*.egg-info/
+
+# Test coverage
+.coverage
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Downloaded price data (yfinance cache)
+.cache/
+
+# macOS
+.DS_Store
+
+# Secrets
+.env
+.env.*
+
+AGENTS.md
+LEARNING.md
+PRD.md
+SPEC.md
+TASKS.md
