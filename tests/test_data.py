@@ -73,6 +73,7 @@ def test_missing_column_raises(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         load_prices(f)
 
+
 def test_integer_prices_become_float(tmp_path: Path) -> None:
     f = write_csv(tmp_path / "p.csv", "date,adj_close\n2024-01-02,100\n2024-01-03,101\n")
     assert load_prices(f).dtype == "float64"

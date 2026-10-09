@@ -15,4 +15,3 @@ def load_prices(path: str | Path, column: str = "adj_close") -> pd.Series:
     if prices.index.has_duplicates:
         raise ValueError("CSV must contain unique dates.")
     return prices
-    
