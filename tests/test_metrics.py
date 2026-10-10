@@ -5,7 +5,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from quantlab.metrics import annualized_vol, cagr, log_returns, sharpe, simple_returns
+from quantlab.metrics import (
+    annualized_vol,
+    cagr,
+    drawdown,
+    log_returns,
+    max_drawdown,
+    sharpe,
+    simple_returns,
+)
 
 
 @pytest.fixture
@@ -92,8 +100,20 @@ def test_sharpe(prices: pd.Series) -> None:
     assert sharpe(r) == pytest.approx(expected_sharpe)
 
 
-@pytest.mark.parametrize("fn", [cagr, annualized_vol, sharpe])
-def test_empty_input_raises(fn: Callable[..., float]) -> None:
+@pytest.mark.parametrize("fn", [cagr, annualized_vol, sharpe, drawdown, max_drawdown])
+def test_empty_input_raises(fn: Callable[..., float | pd.Series]) -> None:
     r = pd.Series([], dtype=float)
     with pytest.raises(ValueError):
         fn(r)
+
+
+def test_drawdown_and_max_drawdown() -> None:
+    equity = pd.Series(
+        [100.0, 120.0, 90.0, 100.0, 150.0, 120.0], index=pd.date_range("2024-01-01", periods=6)
+    )
+    dd = drawdown(equity)
+
+    expected_dd = [0.0, 0.0, -0.25, 100 / 120 - 1, 0.0, -0.20]
+
+    assert dd.to_numpy() == pytest.approx(expected_dd)
+    assert max_drawdown(equity) == pytest.approx(-0.25)

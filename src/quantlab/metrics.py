@@ -53,3 +53,17 @@ def sharpe(returns: pd.Series, rf: float = 0.0, periods_per_year: int = 252) -> 
         return float("nan")
     mean_excess_return = returns.mean() - (rf / periods_per_year)
     return float((mean_excess_return / vol) * math.sqrt(periods_per_year))
+
+
+def drawdown(equity: pd.Series) -> pd.Series:
+    """Drawdown: equity / equity.cummax() - 1."""
+    if equity.empty:
+        raise ValueError("Equity series cannot be empty.")
+    return equity / equity.cummax() - 1
+
+
+def max_drawdown(equity: pd.Series) -> float:
+    """Max drawdown: min of drawdown(); a value <= 0."""
+    if equity.empty:
+        raise ValueError("Equity series cannot be empty.")
+    return float(drawdown(equity).min())
