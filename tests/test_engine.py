@@ -4,8 +4,11 @@ import pytest
 
 from quantlab.backtest.engine import (
     BacktestResult,
+    OptimizationResult,
     compute_costs,
     compute_turnover,
+    multi_asset_comparison,
+    optimize_sma,
     run_backtest,
 )
 from quantlab.backtest.signals import lag_signal, sma_crossover_signal
@@ -272,3 +275,108 @@ def test_n_trades_counts_position_change_days() -> None:
     tv = compute_turnover(result.positions)
     expected_trades = int((tv > 0).sum())
     assert result.n_trades == expected_trades
+
+
+def test_t_en_3_optimize_sma_no_data_leakage() -> None:
+    """T-EN-3: optimize_sma never touches data after train_end during search."""
+    # Generate 120 days of data
+    dates = pd.date_range("2020-01-01", periods=120, freq="B")
+    prices = pd.Series(np.linspace(100.0, 150.0, 120), index=dates)
+
+    train_end = str(dates[79].date())  # 80 days train, 40 days test
+    train_cutoff = pd.Timestamp(train_end)
+
+    opt = optimize_sma(
+        prices,
+        train_end=train_end,
+        fast_grid=[5, 10],
+        slow_grid=[20, 30],
+        cost_bps=5.0,
+    )
+
+    assert isinstance(opt, OptimizationResult)
+    # Train returns and positions must never exceed train_cutoff
+    assert opt.train_result.returns.index.max() <= train_cutoff
+    assert opt.train_result.positions.index.max() <= train_cutoff
+    assert opt.train_result.equity.index.max() <= train_cutoff
+
+    # Grid search results must all have been run on train data
+    assert not opt.grid_results.empty
+    assert (opt.grid_results["fast"] < opt.grid_results["slow"]).all()
+
+    # Out-of-sample test results start strictly after train_cutoff
+    assert opt.test_result.returns.index.min() > train_cutoff
+    assert opt.test_result.positions.index.min() > train_cutoff
+
+
+def test_optimize_sma_best_selection_and_test_metrics() -> None:
+    dates = pd.date_range("2020-01-01", periods=150, freq="B")
+    # Up-trend then down-trend
+    p = np.concatenate([np.linspace(100, 150, 75), np.linspace(150, 110, 75)])
+    prices = pd.Series(p, index=dates)
+
+    train_end = str(dates[99].date())
+    opt = optimize_sma(
+        prices,
+        train_end=train_end,
+        fast_grid=[5, 10, 15],
+        slow_grid=[30, 50],
+        cost_bps=5.0,
+    )
+
+    assert opt.best_fast < opt.best_slow
+    for k in ("cagr", "vol", "sharpe", "max_drawdown", "total_cost"):
+        assert k in opt.train_metrics
+        assert k in opt.test_metrics
+
+    # Test evaluated ONCE on the winning parameters
+    assert isinstance(opt.test_result, BacktestResult)
+
+
+def test_optimize_sma_invalid_inputs() -> None:
+    dates = pd.date_range("2020-01-01", periods=50, freq="B")
+    prices = pd.Series(np.linspace(100, 150, 50), index=dates)
+
+    # Empty test set
+    with pytest.raises(ValueError, match="Both train and test periods must contain price data"):
+        optimize_sma(prices, train_end=str(dates[-1].date()))
+
+    # Empty train set
+    with pytest.raises(ValueError, match="Both train and test periods must contain price data"):
+        optimize_sma(prices, train_end="2019-01-01")
+
+    # No valid pairs (fast >= slow)
+    with pytest.raises(ValueError, match="No valid"):
+        optimize_sma(prices, train_end=str(dates[25].date()), fast_grid=[50], slow_grid=[20])
+
+
+def test_multi_asset_comparison_4_assets() -> None:
+    """T-20: Multi-asset comparison table across 4 assets."""
+    dates = pd.date_range("2020-01-01", periods=100, freq="B")
+
+    prices_dict = {
+        "ASSET_A": pd.Series(np.linspace(100, 150, 100), index=dates),
+        "ASSET_B": pd.Series(np.linspace(100, 80, 100), index=dates),
+        "ASSET_C": pd.Series(100 + 10 * np.sin(np.linspace(0, 3.14, 100)), index=dates),
+        "ASSET_D": pd.Series(np.linspace(50, 120, 100), index=dates),
+    }
+
+    df = multi_asset_comparison(prices_dict, fast=10, slow=30, cost_bps=5.0)
+
+    assert isinstance(df, pd.DataFrame)
+    assert len(df) == 4
+    assert set(df.index) == {"ASSET_A", "ASSET_B", "ASSET_C", "ASSET_D"}
+
+    expected_cols = {
+        "strat_cagr",
+        "bah_cagr",
+        "strat_vol",
+        "bah_vol",
+        "strat_sharpe",
+        "bah_sharpe",
+        "strat_max_dd",
+        "bah_max_dd",
+        "n_trades",
+        "total_cost",
+    }
+    assert expected_cols.issubset(set(df.columns))

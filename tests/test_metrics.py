@@ -9,6 +9,7 @@ from quantlab.metrics import (
     annualized_vol,
     cagr,
     drawdown,
+    historical_vol,
     log_returns,
     max_drawdown,
     sharpe,
@@ -117,3 +118,35 @@ def test_drawdown_and_max_drawdown() -> None:
 
     assert dd.to_numpy() == pytest.approx(expected_dd)
     assert max_drawdown(equity) == pytest.approx(-0.25)
+
+
+def test_historical_vol_full_sample(prices: pd.Series) -> None:
+    vol = historical_vol(prices, window=None)
+    assert isinstance(vol, float)
+    r = log_returns(prices)
+    expected_vol = float(r.std(ddof=1) * math.sqrt(252))
+    assert vol == pytest.approx(expected_vol)
+
+
+def test_historical_vol_rolling(prices: pd.Series) -> None:
+    # 5 prices -> 4 log returns. Rolling window of 3 gives 2 valid entries.
+    rolling = historical_vol(prices, window=3)
+    assert isinstance(rolling, pd.Series)
+    assert len(rolling) == 4
+    assert np.isnan(rolling.iloc[0])
+    assert np.isnan(rolling.iloc[1])
+
+    r = log_returns(prices)
+    expected_3 = float(r.iloc[:3].std(ddof=1) * math.sqrt(252))
+    expected_4 = float(r.iloc[1:4].std(ddof=1) * math.sqrt(252))
+
+    assert rolling.iloc[2] == pytest.approx(expected_3)
+    assert rolling.iloc[3] == pytest.approx(expected_4)
+
+
+def test_historical_vol_validation(prices: pd.Series) -> None:
+    with pytest.raises(ValueError, match="window must be at least 2"):
+        historical_vol(prices, window=1)
+
+    with pytest.raises(ValueError, match="at least two"):
+        historical_vol(pd.Series([100.0]))

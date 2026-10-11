@@ -43,3 +43,28 @@ $$S_T = S \exp\left( \left(r - q - \frac{1}{2}\sigma^2\right)T + \sigma \sqrt{T}
 Generated log-log convergence plot in `docs/mc_convergence.png`:
 - Plotted standard error across $N \in [10^2, 10^6]$ for plain MC, antithetic variates, control variate, and combined.
 - Empirical regression slope of $\log_{10}(\text{SE})$ against $\log_{10}(N)$ measured $-0.475 \approx -0.50$, confirming the $O(N^{-1/2})$ Central Limit Theorem convergence rate.
+
+## T-19: Train/Test Optimization Protocol (`optimize_sma`)
+
+Implemented `optimize_sma` with strict date separation at `train_end` (tested by `T-EN-3`):
+- Grid search runs strictly on `prices <= train_end`. Asserted no look-ahead into test dates during search.
+- Best in-sample parameters (Fast=50, Slow=150) evaluated once on out-of-sample data (`prices > train_end`).
+- Observed realistic parameter decay: In-sample Sharpe of 0.88 degraded to 0.80 out-of-sample, trailing Buy & Hold (0.90).
+
+## T-20: Multi-Asset Backtest Comparison
+
+Implemented `multi_asset_comparison` evaluating 4 distinct asset classes (`SPY`, `AAPL`, `GLD`, `TLT`) against Buy & Hold:
+- Highlighted that SMA crossover works best in secular bear markets (`TLT` drawdown reduced from -48.35% to -25.21%), while lagging in high-drift equities (`SPY`, `AAPL`) due to whipsaw and cash drag.
+
+## T-21: Historical Volatility Metric (`historical_vol`)
+
+Implemented `historical_vol` in `metrics.py` with type overloads:
+- Uses log returns $r_t = \ln(p_t / p_{t-1})$ annualized via $\sqrt{252}$.
+- Supports both full-sample (returning float) and rolling window (returning `pd.Series`).
+
+## T-22: Empirical Results Documentation (`docs/results.md`)
+
+Drafted comprehensive `docs/results.md`:
+- Documents in-sample vs out-of-sample tables with and without costs.
+- Includes multi-asset comparison table and Monte Carlo variance reduction table.
+- Formulates honest, transparent conclusions regarding trend-following pitfalls and structural limitations.

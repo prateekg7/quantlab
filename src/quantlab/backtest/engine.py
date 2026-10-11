@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import math
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass
 
+import numpy as np
 import pandas as pd
 
 from quantlab.backtest.signals import lag_signal, sma_crossover_signal
@@ -64,7 +67,7 @@ def compute_costs(turnover: pd.Series, cost_bps: float) -> pd.Series:
     return turnover * cost_bps / 10_000
 
 
-@dataclass
+@dataclass(frozen=True)
 class BacktestResult:
     """Results from a single backtest run.
 
@@ -82,6 +85,29 @@ class BacktestResult:
     equity: pd.Series
     n_trades: int
     metrics: dict[str, float]
+
+
+@dataclass(frozen=True)
+class OptimizationResult:
+    """Results from SMA parameter optimization with train/test separation.
+
+    Attributes:
+        best_fast: Winning fast SMA window chosen on training data.
+        best_slow: Winning slow SMA window chosen on training data.
+        train_metrics: Performance metrics on the in-sample training set.
+        test_metrics: Performance metrics on the out-of-sample test set.
+        train_result: BacktestResult for winning parameters on the training set.
+        test_result: BacktestResult for winning parameters on the test set.
+        grid_results: DataFrame of all parameter combinations evaluated during search.
+    """
+
+    best_fast: int
+    best_slow: int
+    train_metrics: dict[str, float]
+    test_metrics: dict[str, float]
+    train_result: BacktestResult
+    test_result: BacktestResult
+    grid_results: pd.DataFrame
 
 
 def run_backtest(
@@ -165,3 +191,183 @@ def run_backtest(
         n_trades=n_trades,
         metrics=metrics,
     )
+
+
+def optimize_sma(
+    prices: pd.Series,
+    train_end: str | pd.Timestamp,
+    fast_grid: Sequence[int] | None = None,
+    slow_grid: Sequence[int] | None = None,
+    cost_bps: float = 0.0,
+    long_short: bool = False,
+) -> OptimizationResult:
+    r"""Optimize SMA crossover parameters on in-sample data and evaluate out-of-sample.
+
+    Protocol (F-19, T-EN-3):
+        1. Split prices by date at ``train_end``. The grid search evaluates parameter
+           combinations strictly on data up to ``train_end`` (asserting max date <= train_end).
+        2. Objective: maximize Sharpe ratio net of costs on the training set.
+        3. The winning parameter pair (best_fast, best_slow) is evaluated ONCE on the
+           test set (prices after train_end).
+        4. To avoid losing warm-up days at the start of the test period, indicators
+           are computed on the full price history, and returns are evaluated for t > train_end.
+
+    Parameters:
+        prices: Daily price series with DatetimeIndex.
+        train_end: End date of training period (inclusive, e.g. "2018-12-31").
+        fast_grid: Sequence of fast SMA windows (default: (5, 10, 20, 30, 50)).
+        slow_grid: Sequence of slow SMA windows (default: (50, 100, 150, 200)).
+        cost_bps: One-way transaction costs in basis points.
+        long_short: If True, strategy shorts when fast < slow; else flat.
+
+    Returns:
+        OptimizationResult dataclass.
+    """
+    train_cutoff = pd.Timestamp(train_end)
+    train_prices = prices.loc[prices.index <= train_cutoff]
+    test_prices = prices.loc[prices.index > train_cutoff]
+
+    if train_prices.empty or test_prices.empty:
+        raise ValueError("Both train and test periods must contain price data.")
+
+    fast_candidates = list(fast_grid) if fast_grid is not None else [5, 10, 20, 30, 50]
+    slow_candidates = list(slow_grid) if slow_grid is not None else [50, 100, 150, 200]
+
+    grid = [(f, s) for f in fast_candidates for s in slow_candidates if f < s]
+    if not grid:
+        raise ValueError("No valid (fast, slow) pairs with fast < slow.")
+
+    # T-EN-3: Assert that training prices never touch data after train_end
+    assert train_prices.index.max() <= train_cutoff, (
+        "Data leakage: post-cutoff prices in train set."
+    )
+
+    best_sharpe = -float("inf")
+    best_pair: tuple[int, int] | None = None
+    grid_rows: list[dict[str, float | int]] = []
+
+    for f, s in grid:
+        res_train = run_backtest(
+            train_prices, fast=f, slow=s, cost_bps=cost_bps, long_short=long_short
+        )
+        assert res_train.returns.index.max() <= train_cutoff
+
+        sh = res_train.metrics["sharpe"]
+        score = -float("inf") if (math.isnan(sh) or np.isnan(sh)) else float(sh)
+
+        grid_rows.append(
+            {
+                "fast": f,
+                "slow": s,
+                "sharpe": sh,
+                "cagr": res_train.metrics["cagr"],
+                "vol": res_train.metrics["vol"],
+                "max_drawdown": res_train.metrics["max_drawdown"],
+                "total_cost": res_train.metrics["total_cost"],
+                "n_trades": res_train.n_trades,
+            }
+        )
+
+        if score > best_sharpe:
+            best_sharpe = score
+            best_pair = (f, s)
+
+    if best_pair is None:
+        best_pair = grid[0]
+
+    best_fast, best_slow = best_pair
+    best_train_res = run_backtest(
+        train_prices, fast=best_fast, slow=best_slow, cost_bps=cost_bps, long_short=long_short
+    )
+
+    # Evaluate on test period ONCE: full history used to warm up SMAs
+    full_res = run_backtest(
+        prices, fast=best_fast, slow=best_slow, cost_bps=cost_bps, long_short=long_short
+    )
+
+    test_returns = full_res.returns.loc[full_res.returns.index > train_cutoff]
+    test_positions = full_res.positions.loc[full_res.positions.index > train_cutoff]
+    test_turnover = compute_turnover(test_positions)
+    test_costs = compute_costs(test_turnover, cost_bps)
+    test_equity = (1.0 + test_returns).cumprod()
+    test_trades = int((test_turnover > 0).sum())
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        test_metrics: dict[str, float] = {
+            "cagr": cagr(test_returns),
+            "vol": annualized_vol(test_returns),
+            "sharpe": sharpe(test_returns),
+            "max_drawdown": max_drawdown(test_equity),
+            "total_cost": float(test_costs.sum()),
+        }
+
+    test_res = BacktestResult(
+        returns=test_returns,
+        positions=test_positions,
+        equity=test_equity,
+        n_trades=test_trades,
+        metrics=test_metrics,
+    )
+
+    return OptimizationResult(
+        best_fast=best_fast,
+        best_slow=best_slow,
+        train_metrics=best_train_res.metrics,
+        test_metrics=test_metrics,
+        train_result=best_train_res,
+        test_result=test_res,
+        grid_results=pd.DataFrame(grid_rows),
+    )
+
+
+def multi_asset_comparison(
+    prices_dict: dict[str, pd.Series],
+    fast: int = 50,
+    slow: int = 200,
+    cost_bps: float = 5.0,
+    long_short: bool = False,
+) -> pd.DataFrame:
+    r"""Run SMA crossover strategy across multiple assets and compare to buy-and-hold.
+
+    Parameters:
+        prices_dict: Dictionary mapping asset ticker symbol to its price series.
+        fast: Fast SMA window (default 50).
+        slow: Slow SMA window (default 200).
+        cost_bps: One-way cost in basis points (default 5.0).
+        long_short: If True, long/short strategy; else long-only.
+
+    Returns:
+        DataFrame comparing Strategy vs Buy & Hold across CAGR, Volatility,
+        Sharpe ratio, Max Drawdown, and trade count for all assets.
+    """
+    rows = []
+    for ticker, prices in prices_dict.items():
+        res = run_backtest(prices, fast=fast, slow=slow, cost_bps=cost_bps, long_short=long_short)
+        asset_ret = simple_returns(prices)
+        bah_equity = (1.0 + asset_ret).cumprod()
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            bah_cagr = cagr(asset_ret)
+            bah_vol = annualized_vol(asset_ret)
+            bah_sh = sharpe(asset_ret)
+            bah_mdd = max_drawdown(bah_equity)
+
+        rows.append(
+            {
+                "ticker": ticker,
+                "strat_cagr": res.metrics["cagr"],
+                "bah_cagr": bah_cagr,
+                "strat_vol": res.metrics["vol"],
+                "bah_vol": bah_vol,
+                "strat_sharpe": res.metrics["sharpe"],
+                "bah_sharpe": bah_sh,
+                "strat_max_dd": res.metrics["max_drawdown"],
+                "bah_max_dd": bah_mdd,
+                "n_trades": res.n_trades,
+                "total_cost": res.metrics["total_cost"],
+            }
+        )
+
+    return pd.DataFrame(rows).set_index("ticker")
