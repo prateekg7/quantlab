@@ -6,3 +6,14 @@ from scipy.stats import norm
 def test_scientific_stack_imports() -> None:
     assert np.isclose(norm.cdf(0.0), 0.5)
     assert pd.Series([1, 2, 3]).sum() == 6
+
+
+def test_package_imports() -> None:
+    import quantlab
+    import quantlab.backtest
+    import quantlab.data
+    import quantlab.metrics
+    import quantlab.pricing
+    import quantlab.simulation
+
+    assert quantlab.__file__ is not None
