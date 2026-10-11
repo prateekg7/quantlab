@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from quantlab.backtest.signals import sma_crossover_signal
+from quantlab.backtest.signals import lag_signal, sma_crossover_signal
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -145,3 +145,88 @@ def test_windows_must_be_positive() -> None:
         sma_crossover_signal(prices, fast=0, slow=10)
     with pytest.raises(ValueError):
         sma_crossover_signal(prices, fast=5, slow=0)
+
+
+# ---------------------------------------------------------------------------
+# T-SG-1: Look-ahead bias test (lag_signal)
+# ---------------------------------------------------------------------------
+
+
+def test_lag_signal_shifts_by_one() -> None:
+    """T-SG-1 core: position(t) == signal(t-1), verified element-by-element."""
+    prices = make_prices(30)
+    raw = sma_crossover_signal(prices, fast=3, slow=5)
+    position = lag_signal(raw)
+
+    # position[i] must equal raw[i-1] for all i >= 1
+    for i in range(1, len(raw)):
+        assert position.iloc[i] == raw.iloc[i - 1], (
+            f"Mismatch at index {i}: position={position.iloc[i]}, signal={raw.iloc[i - 1]}"
+        )
+
+    # The very first position must be 0 (no prior signal — fill_value=0)
+    assert position.iloc[0] == 0.0
+
+
+def test_changing_price_on_day_t_does_not_change_position_on_day_t() -> None:
+    """T-SG-1: Mutating today's price must not affect today's position.
+
+    This is the canonical look-ahead test. If the position on day t depends on the
+    price of day t, the strategy is peeking into the future.
+    """
+    n = 40
+    fast, slow = 3, 10
+
+    prices_original = pd.Series(
+        np.linspace(100.0, 140.0, n),
+        index=pd.date_range("2024-01-02", periods=n, freq="B"),
+    )
+
+    # Compute positions using original prices
+    signal_orig = sma_crossover_signal(prices_original, fast=fast, slow=slow)
+    position_orig = lag_signal(signal_orig)
+
+    # Perturb the price on every day t (simulate "seeing the future") and re-derive positions
+    for t in range(slow, n):
+        prices_perturbed = prices_original.copy()
+        prices_perturbed.iloc[t] = prices_original.iloc[t] * 10.0  # dramatic change on day t
+
+        signal_perturbed = sma_crossover_signal(prices_perturbed, fast=fast, slow=slow)
+        position_perturbed = lag_signal(signal_perturbed)
+
+        # The position on day t must NOT have changed even though price[t] changed,
+        # because position(t) = signal(t-1) which only uses prices up to t-1.
+        assert position_perturbed.iloc[t] == position_orig.iloc[t], (
+            f"Day {t}: position changed from {position_orig.iloc[t]} to "
+            f"{position_perturbed.iloc[t]} after mutating price[{t}] — look-ahead bias!"
+        )
+
+
+def test_lag_signal_preserves_index_and_length() -> None:
+    """lag_signal output has the same index and length as the input."""
+    prices = make_prices(25)
+    raw = sma_crossover_signal(prices, fast=3, slow=8)
+    position = lag_signal(raw)
+
+    assert len(position) == len(raw)
+    assert position.index.equals(raw.index)
+
+
+def test_lag_signal_arbitrary_lag() -> None:
+    """lag=2 shifts by two periods; first two entries are 0."""
+    prices = make_prices(20)
+    raw = sma_crossover_signal(prices, fast=3, slow=5)
+    position = lag_signal(raw, lag=2)
+
+    assert position.iloc[0] == 0.0
+    assert position.iloc[1] == 0.0
+    for i in range(2, len(raw)):
+        assert position.iloc[i] == raw.iloc[i - 2]
+
+
+def test_lag_signal_invalid_lag() -> None:
+    """lag < 1 raises ValueError."""
+    prices = make_prices(20)
+    raw = sma_crossover_signal(prices, fast=3, slow=5)
+    with pytest.raises(ValueError, match="lag must be >= 1"):
+        lag_signal(raw, lag=0)

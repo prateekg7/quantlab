@@ -61,3 +61,40 @@ def sma_crossover_signal(
     signal[has_slow & (sma_fast <= sma_slow)] = float(out_val)
 
     return signal
+
+
+def lag_signal(signal: pd.Series, lag: int = 1) -> pd.Series:
+    """Shift a signal forward in time to convert it into a position series.
+
+    In any real trading system you can only act on a signal *after* you observe it.
+    A signal computed at the close of day t can only be executed at the open of day t+1
+    — or equivalently, it becomes the position *held during* day t+1.
+
+    This one-line shift is the sole mechanism that protects a backtest from look-ahead
+    bias: without it, the strategy would "know" the current day's closing price before
+    deciding whether to buy or sell, which is impossible in practice.
+
+    Formula:
+        position(t) = signal(t - lag)
+
+    The first `lag` entries become NaN after shifting; they are filled with 0 (flat)
+    because there is no prior signal to act on.
+
+    Parameters:
+        signal: Raw signal series produced by `sma_crossover_signal` (or similar).
+        lag: Number of periods to shift forward (default 1 = one trading day).
+
+    Returns:
+        pd.Series with the same index as `signal`, values shifted by `lag`.
+        Leading NaNs (from the shift) are replaced with 0.
+
+    Raises:
+        ValueError: If lag < 1.
+    """
+    if lag < 1:
+        raise ValueError(f"lag must be >= 1, got {lag}")
+
+    # shift(1) moves every value one row forward:
+    # the position on day t becomes the signal from day t-1.
+    # fill_value=0 replaces the leading NaN that shift introduces (no position before history).
+    return signal.shift(lag, fill_value=0.0)
