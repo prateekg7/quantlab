@@ -80,3 +80,32 @@ Implemented analytical sensitivities for European calls and puts under Black-Sch
 - Verified `T-GR-2` bounds ($\Delta \in [0, 1]$ for calls, $[-1, 0]$ for puts, $\Gamma \ge 0$, $\mathcal{V} \ge 0$).
 - Verified exact consistency with Black-Scholes PDE: $\Theta + (r - q)S\Delta + \frac{1}{2}\sigma^2 S^2 \Gamma = rV$.
 - Validated Put-Call Parity across all five Greeks.
+
+## T-24: Finite-Difference Greeks & Common Random Numbers (`fd_greeks`)
+
+Implemented central finite-difference sensitivities for arbitrary pricing callables:
+- Central difference step $h_S = h_{\text{rel}} S$ yields $O(h^2)$ truncation error: $\Delta = \frac{V(S+h) - V(S-h)}{2h}$, $\Gamma = \frac{V(S+h) - 2V(S) + V(S-h)}{h^2}$.
+- One-sided calendar decay for Theta: $h_T = \min(h_{\text{rel}}, T/2)$, $\Theta = \frac{V(T - h_T) - V(T)}{h_T}$.
+- Matches analytical Greeks within strict `T-GR-1` tolerance thresholds ($\Delta < 10^{-5}, \Gamma < 10^{-4}, \mathcal{V} < 10^{-3}$).
+- **Common Random Numbers (CRN):** Demonstrated that when pricing via Monte Carlo, resetting to identical RNG seeds across bump evaluations is mandatory; independent draws create independent sample noise $\sim \epsilon / h^2$, rendering finite-difference Gamma complete white noise.
+
+## T-25: Cox-Ross-Rubinstein Binomial Tree (`binomial_price`)
+
+Implemented recombining binomial lattice pricing for European and American options:
+- Lattice parameters: $u = e^{\sigma \sqrt{\Delta t}}$, $d = 1/u$, $p = \frac{e^{(r-q)\Delta t} - d}{u - d}$. Raises `ValueError` if $p \notin [0, 1]$.
+- Memory efficient $O(\text{steps})$ 1D array rolled backward in time.
+- Validated `T-BT-1` convergence against Black-Scholes analytical values.
+- Validated `T-BT-2` American early exercise properties: American call with $q=0$ strictly matches European call (early exercise never optimal); American put strictly $\ge$ European put, displaying significant early exercise premium for deep ITM puts.
+
+## T-26: Binomial Convergence & Sawtooth Analysis (`docs/binomial_convergence.png`)
+
+Generated convergence study comparing CRR tree prices against Black-Scholes for $n \in [10, 300]$:
+- Observed classical sawtooth oscillations caused by node-strike misalignment (whether strike $K$ sits near a lattice node or midway between two nodes at maturity).
+- Verified the asymptotic $O(1/n)$ decay envelope of pricing error.
+
+## T-27: Implied Volatility via Newton-Raphson & Bisection Fallback (`implied_vol`)
+
+Implemented root-finding algorithm to invert Black-Scholes option pricing:
+- Enforces strict no-arbitrage bounds for calls ($\max(S e^{-qT} - K e^{-rT}, 0) < C < S e^{-qT}$) and puts ($\max(K e^{-rT} - S e^{-qT}, 0) < P < K e^{-rT}$), raising `ValueError` for invalid market prices (`T-IV-2`).
+- Iterates via analytical Black-Scholes Vega ($\sigma_{n+1} = \sigma_n - \frac{\text{BS}(\sigma_n) - C}{\mathcal{V}}$) starting at $\sigma_0 = 0.20$.
+- Implements robust bisection fallback on $[10^{-6}, 5.0]$ whenever Vega $< 10^{-8}$ or iterates leave the valid domain, ensuring guaranteed convergence across extreme moneyness and long maturities (`T-IV-1`).

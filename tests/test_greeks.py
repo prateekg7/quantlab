@@ -8,7 +8,8 @@ import pytest
 from scipy.stats import norm
 
 from quantlab.pricing.black_scholes import bs_price
-from quantlab.pricing.greeks import Greeks, bs_greeks
+from quantlab.pricing.greeks import Greeks, bs_greeks, fd_greeks
+from quantlab.pricing.monte_carlo import mc_price
 
 
 def test_greeks_dataclass_frozen() -> None:
@@ -165,3 +166,114 @@ def test_greeks_input_validation() -> None:
 
     with pytest.raises(ValueError, match="Option type must be 'call' or 'put'"):
         bs_greeks(100.0, 100.0, 0.05, 0.20, 1.0, "straddle")  # type: ignore[arg-type]
+
+
+def test_t_gr_1_fd_greeks_matches_analytical() -> None:
+    """T-GR-1: FD Greeks match analytical Greeks (delta 1e-5, gamma 1e-4, vega 1e-3)."""
+    spots = [80.0, 100.0, 120.0]
+    options: tuple[Literal["call", "put"], ...] = ("call", "put")
+    q_vals = [0.0, 0.02]
+
+    K = 100.0
+    r = 0.05
+    sigma = 0.20
+    T = 1.0
+
+    for S in spots:
+        for opt in options:
+            for q in q_vals:
+                analytical = bs_greeks(S, K, r, sigma, T, opt, q=q)
+                fd = fd_greeks(bs_price, S, K, r, sigma, T, opt, q=q)
+
+                # Acceptance criteria from SPEC.md: delta 1e-5, gamma 1e-4, vega 1e-3
+                assert abs(fd.delta - analytical.delta) < 1e-5
+                assert abs(fd.gamma - analytical.gamma) < 1e-4
+                assert abs(fd.vega - analytical.vega) < 1e-3
+
+                # Rho within 1e-3
+                assert abs(fd.rho - analytical.rho) < 1e-3
+
+                # Theta is one-sided difference with O(h) truncation error (well within 1e-2)
+                assert abs(fd.theta - analytical.theta) < 1e-2
+
+
+def test_fd_greeks_common_random_numbers() -> None:
+    """Demonstrate that CRN is mandatory for stable MC finite differences."""
+    S, K, r, sigma, T = 100.0, 100.0, 0.05, 0.20, 1.0
+
+    def mc_crn(
+        s: float,
+        k: float,
+        rate: float,
+        vol: float,
+        mat: float,
+        opt: Literal["call", "put"],
+        div: float = 0.0,
+    ) -> float:
+        # Same fixed seed across all bumped calls (CRN)
+        return mc_price(
+            s,
+            k,
+            rate,
+            vol,
+            mat,
+            opt,
+            q=div,
+            n_paths=50_000,
+            seed=42,
+            antithetic=True,
+            control_variate=True,
+        ).price
+
+    fd_crn = fd_greeks(mc_crn, S, K, r, sigma, T, "call")
+    analytical = bs_greeks(S, K, r, sigma, T, "call")
+
+    # With CRN, delta matches within ~0.005 and gamma is positive and accurate within ~0.005
+    assert abs(fd_crn.delta - analytical.delta) < 0.01
+    assert abs(fd_crn.gamma - analytical.gamma) < 0.01
+    assert fd_crn.gamma > 0.0
+
+
+def test_fd_greeks_input_validation() -> None:
+    """Verify input validation for fd_greeks."""
+    with pytest.raises(ValueError, match="Spot price S must be positive"):
+        fd_greeks(bs_price, -10.0, 100.0, 0.05, 0.20, 1.0, "call")
+
+    with pytest.raises(ValueError, match="Strike price K must be positive"):
+        fd_greeks(bs_price, 100.0, 0.0, 0.05, 0.20, 1.0, "call")
+
+    with pytest.raises(ValueError, match="Volatility sigma must be positive"):
+        fd_greeks(bs_price, 100.0, 100.0, 0.05, -0.20, 1.0, "call")
+
+    with pytest.raises(ValueError, match="Time to maturity T must be non-negative"):
+        fd_greeks(bs_price, 100.0, 100.0, 0.05, 0.20, -1.0, "call")
+
+    with pytest.raises(ValueError, match="Relative bump size h_rel must be positive"):
+        fd_greeks(bs_price, 100.0, 100.0, 0.05, 0.20, 1.0, "call", h_rel=0.0)
+
+    with pytest.raises(ValueError, match="Option type must be 'call' or 'put'"):
+        fd_greeks(bs_price, 100.0, 100.0, 0.05, 0.20, 1.0, "butterfly")  # type: ignore[arg-type]
+
+
+def test_fd_greeks_boundary_at_expiry() -> None:
+    """T=0 expiry returns intrinsic step derivatives."""
+    g_call = fd_greeks(bs_price, 105.0, 100.0, 0.05, 0.20, 0.0, "call")
+    assert g_call.delta == 1.0
+    assert g_call.gamma == 0.0
+    assert g_call.vega == 0.0
+    assert g_call.theta == 0.0
+    assert g_call.rho == 0.0
+
+    g_put = fd_greeks(bs_price, 95.0, 100.0, 0.05, 0.20, 0.0, "put")
+    assert g_put.delta == -1.0
+    assert g_put.gamma == 0.0
+
+
+def test_fd_greeks_custom_signature() -> None:
+    """Verify fd_greeks works with flexible signature callable."""
+    # Callable taking only (s, sig, r)
+    fn = lambda s, sig, r: bs_price(s, 100.0, r, sig, 1.0, "call")  # noqa: E731
+    g = fd_greeks(fn, 100.0, 100.0, 0.05, 0.20, 1.0, "call")
+    analytical = bs_greeks(100.0, 100.0, 0.05, 0.20, 1.0, "call")
+    assert abs(g.delta - analytical.delta) < 1e-5
+    assert abs(g.gamma - analytical.gamma) < 1e-4
