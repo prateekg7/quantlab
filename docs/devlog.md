@@ -68,3 +68,15 @@ Drafted comprehensive `docs/results.md`:
 - Documents in-sample vs out-of-sample tables with and without costs.
 - Includes multi-asset comparison table and Monte Carlo variance reduction table.
 - Formulates honest, transparent conclusions regarding trend-following pitfalls and structural limitations.
+
+## T-23: Analytical Black-Scholes Greeks (`bs_greeks`, `Greeks`)
+
+Implemented analytical sensitivities for European calls and puts under Black-Scholes-Merton with continuous dividend yield $q$:
+- $\Delta$: $\frac{\partial V}{\partial S} = e^{-qT} N(d_1)$ (call) and $-e^{-qT} N(-d_1)$ (put).
+- $\Gamma$: $\frac{\partial^2 V}{\partial S^2} = \frac{e^{-qT} \phi(d_1)}{S \sigma \sqrt{T}}$ (identical for call and put).
+- $\mathcal{V}$: $\frac{\partial V}{\partial \sigma} = S e^{-qT} \phi(d_1) \sqrt{T}$ (per 1.00 vol change, identical for call and put).
+- $\Theta$: $\frac{\partial V}{\partial t} = -\frac{\partial V}{\partial T}$ (per calendar year).
+- $\rho$: $\frac{\partial V}{\partial r} = K T e^{-rT} N(d_2)$ (call) and $-K T e^{-rT} N(-d_2)$ (put).
+- Verified `T-GR-2` bounds ($\Delta \in [0, 1]$ for calls, $[-1, 0]$ for puts, $\Gamma \ge 0$, $\mathcal{V} \ge 0$).
+- Verified exact consistency with Black-Scholes PDE: $\Theta + (r - q)S\Delta + \frac{1}{2}\sigma^2 S^2 \Gamma = rV$.
+- Validated Put-Call Parity across all five Greeks.
